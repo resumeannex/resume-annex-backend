@@ -62,30 +62,42 @@ app.post('/api/optimize', async (req, res) => {
         res.status(500).json({ error: "AI Service Unavailable" });
     }
 });
-
-// 3. ENTERPRISE INTAKE CHAT (The "Gap Analyzer")
+// 3. ENTERPRISE INTAKE CHAT (Context-Aware + Termination Logic)
 app.post('/api/chat', async (req, res) => {
     try {
-        const { messages } = req.body; 
+        // We now accept 'plan' from the frontend to know which package they bought
+        const { messages, plan } = req.body; 
         if (!messages) return res.status(400).json({ error: 'No messages provided' });
 
-        // The "Enterprise" Persona
+        // Define Next Steps based on the Plan
+        let nextStepsText = "Your optimized draft will be emailed to you within 3 business days.";
+        if (plan === 'executive') {
+            nextStepsText = "I will now prepare your briefing for the Senior Writer. Expect a scheduling link for your narrative strategy call within 24 hours.";
+        } else if (plan === 'pro') {
+            nextStepsText = "Our team will begin drafting your Professional documents immediately. Expect the first version via email in 48-72 hours.";
+        } else if (plan === 'core') {
+            nextStepsText = "We will process your ATS optimization and send the revised file shortly.";
+        }
+
+        // The "Enterprise" Persona with KILL SWITCH
         const systemPrompt = {
             role: "system",
-            content: `You are the Senior Architect for Resume Annex. Your goal is to analyze the candidate's profile for "Gaps" (missing metrics, vague leadership, undefined scope).
+            content: `You are the Senior Architect for Resume Annex. Your goal is to gather info, BUT you must respect the user's time.
             
-            STRATEGY:
-            1. Start by acknowledging the resume upload.
-            2. Immediately identify a potential "Gap" based on their introduction. 
-            3. Ask ONE short, high-impact question to fill that gap.
-            4. Be conversational but authoritative. Do not be generic.
+            CORE RULES:
+            1. Analyze the profile for gaps. Ask ONE short, high-impact question at a time.
+            2. CRITICAL: If the user answers "no", "none", "nothing", "I'm done", or gives very short negative responses, DO NOT ASK MORE QUESTIONS.
+            3. CRITICAL: If you have asked 3-4 questions already, wrap it up.
             
-            Example: "I see you led the sales team, but I don't see the revenue impact. What was the specific % growth you drove in 2024?"`
+            CLOSING PROTOCOL:
+            If the user is done or the conversation is stagnant, you MUST end the chat.
+            Say exactly: "Thank you. I have captured everything I need. ${nextStepsText}"
+            Do not ask "Is there anything else?". Just close the session.`
         };
 
         const completion = await openai.chat.completions.create({
             messages: [systemPrompt, ...messages],
-            model: "gpt-4o", // Best intelligence agent
+            model: "gpt-4o",
         });
 
         res.json({ reply: completion.choices[0].message.content.trim() });
@@ -94,9 +106,4 @@ app.post('/api/chat', async (req, res) => {
         console.error("Chat Error:", error);
         res.status(500).json({ error: "AI Service Unavailable" });
     }
-});
-
-// --- START SERVER ---
-app.listen(PORT, () => {
-    console.log(`>>> Resume Annex Enterprise Engine running on port ${PORT}`);
 });
