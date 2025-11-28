@@ -5,65 +5,82 @@
  * 1. Security Headers (Helmet)
  * 2. Rate Limiting (DDoS Protection)
  * 3. API Architecture
+ * 4. REAL OpenAI Integration
  */
 
+require('dotenv').config(); // Load environment variables
 const express = require('express');
-const helmet = require('helmet'); // Security headers
-const cors = require('cors');     // Cross-origin resource sharing
-const rateLimit = require('express-rate-limit'); // Prevent abuse
+const helmet = require('helmet');
+const cors = require('cors');
+const rateLimit = require('express-rate-limit');
+const OpenAI = require('openai'); // Import OpenAI
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// --- 1. ENTERPRISE SECURITY MIDDLEWARE ---
-app.use(helmet()); // Protects against XSS and header attacks
-app.use(cors());   // Allows frontend to communicate securely
-app.use(express.json({ limit: '10kb' })); // Prevents large payload attacks
+// --- CONFIGURATION ---
+const openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY, // Pulls key from Railway Variables
+});
 
-// --- 2. RATE LIMITING (Cost Control) ---
+// --- MIDDLEWARE ---
+app.use(helmet());
+app.use(cors());
+app.use(express.json({ limit: '10kb' }));
+
+// --- RATE LIMITING ---
 const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 100, // Limit each IP to 100 requests per window
+    windowMs: 15 * 60 * 1000, 
+    max: 50, // Stricter limit for real AI (saves money)
     message: "Too many requests from this IP, please try again later."
 });
 app.use('/api/', apiLimiter);
 
-// --- 3. API ENDPOINTS ---
+// --- ROUTES ---
 
-// Health Check (For Monitoring)
+// Health Check
 app.get('/health', (req, res) => {
-    res.status(200).json({ status: 'UP', environment: 'production' });
+    res.status(200).json({ status: 'UP', service: 'Resume Annex AI' });
 });
 
-// AI Optimization Endpoint (Mock)
-app.post('/api/optimize', (req, res) => {
-    const { bulletPoint } = req.body;
-    
-    // In real production, this calls OpenAI/Gemini API
-    // We mock it here for the prototype
-    if (!bulletPoint) {
-        return res.status(400).json({ error: 'No content provided' });
+// REAL AI OPTIMIZATION
+app.post('/api/optimize', async (req, res) => {
+    try {
+        const { bulletPoint } = req.body;
+
+        if (!bulletPoint) {
+            return res.status(400).json({ error: 'No content provided' });
+        }
+
+        // Call OpenAI GPT-4o or GPT-3.5-turbo
+        const completion = await openai.chat.completions.create({
+            messages: [
+                { 
+                    role: "system", 
+                    content: "You are an expert Executive Resume Writer. Your task is to rewrite the user's resume bullet point to be high-impact, results-oriented, and quantified. Use strong action verbs. Return ONLY the rewritten bullet point." 
+                },
+                { 
+                    role: "user", 
+                    content: `Rewrite this resume bullet point: "${bulletPoint}"` 
+                }
+            ],
+            model: "gpt-3.5-turbo", // Use "gpt-4o" for better quality but higher cost
+        });
+
+        const enhancedText = completion.choices[0].message.content.trim();
+
+        res.json({
+            original: bulletPoint,
+            enhanced: enhancedText
+        });
+
+    } catch (error) {
+        console.error("OpenAI Error:", error);
+        res.status(500).json({ error: "AI Service Unavailable" });
     }
-
-    res.json({
-        original: bulletPoint,
-        enhanced: "Spearheaded a strategic initiative that increased efficiency by 20%...",
-        metrics: { ats_score: 85, impact: "High" }
-    });
 });
 
-// Subscription Webhook (Stripe Integration Placeholder)
-app.post('/api/webhooks/stripe', (req, res) => {
-    // This receives payment confirmation from Stripe
-    console.log("Payment received");
-    res.status(200).send('Received');
-});
-
-// --- 4. SERVE FRONTEND (Production Mode) ---
-app.use(express.static('.')); // Serves your HTML files
-
-// --- 5. START SERVER ---
+// --- START SERVER ---
 app.listen(PORT, () => {
     console.log(`>>> Resume Annex Enterprise Engine running on port ${PORT}`);
-    console.log(`>>> Security Protocols: ACTIVE`);
 });
