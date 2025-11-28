@@ -1,10 +1,6 @@
 /**
- * RESUME ANNEX - ENTERPRISE BACKEND
- * ---------------------------------
- * Enterprise-grade server implementing:
- * 1. GPT-4o Intelligence (The "Best Agent")
- * 2. Context-Aware Chat (Intake)
- * 3. Gap Analysis Strategy
+ * RESUME ANNEX - ENTERPRISE BACKEND (v2.0 Stable)
+ * Fixes: CORS blocking, API Crashing, Error Logging
  */
 
 require('dotenv').config(); 
@@ -17,82 +13,71 @@ const OpenAI = require('openai');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// --- CONFIGURATION ---
+// --- 1. ROBUST CONFIGURATION ---
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY, 
 });
 
-// --- MIDDLEWARE ---
+// --- 2. SECURITY MIDDLEWARE ---
 app.use(helmet());
-app.use(cors());
+
+// CRITICAL FIX: Allow your frontend to talk to this server
+app.use(cors({
+    origin: '*', // Temporarily allow all for debugging. In production, change to your domain.
+    methods: ['GET', 'POST'],
+    allowedHeaders: ['Content-Type']
+}));
+
 app.use(express.json({ limit: '10kb' }));
 
-// --- RATE LIMITING ---
-const apiLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000, 
-    max: 50, 
-    message: "Too many requests from this IP, please try again later."
-});
-app.use('/api/', apiLimiter);
+// --- 3. ROUTES ---
 
-// --- ROUTES ---
-
-// 1. Health Check
+// Health Check - Call this to prove server is alive
 app.get('/health', (req, res) => {
-    res.status(200).json({ status: 'UP', service: 'Resume Annex AI', model: 'gpt-4o' });
+    res.status(200).json({ status: 'ONLINE', message: 'System Operational' });
 });
 
-// 2. LIVE DEMO (Bullet Point Rewrite)
+// Live Demo Endpoint
 app.post('/api/optimize', async (req, res) => {
     try {
+        console.log("Optimization Request Received"); // Server Log
         const { bulletPoint } = req.body;
-        if (!bulletPoint) return res.status(400).json({ error: 'No content' });
+        
+        if (!bulletPoint) return res.status(400).json({ error: 'No text provided' });
 
         const completion = await openai.chat.completions.create({
             messages: [
-                { role: "system", content: "You are an Executive Resume Writer. Rewrite the input to be high-impact, quantified, and results-driven." },
-                { role: "user", content: `Optimize this bullet: "${bulletPoint}"` }
+                { role: "system", content: "Rewrite this resume bullet to be high-impact and quantified." },
+                { role: "user", content: bulletPoint }
             ],
-            model: "gpt-4o", // Upgraded to smartest model
+            model: "gpt-4o",
         });
 
         res.json({ enhanced: completion.choices[0].message.content.trim() });
+
     } catch (error) {
-        console.error("AI Error:", error);
-        res.status(500).json({ error: "AI Service Unavailable" });
+        console.error("AI Error:", error.message); // Logs exact error to Railway console
+        res.status(500).json({ error: error.message || "AI Service Failed" });
     }
 });
-// 3. ENTERPRISE INTAKE CHAT (Context-Aware + Termination Logic)
+
+// Intake Chat Endpoint
 app.post('/api/chat', async (req, res) => {
     try {
-        // We now accept 'plan' from the frontend to know which package they bought
         const { messages, plan } = req.body; 
-        if (!messages) return res.status(400).json({ error: 'No messages provided' });
+        
+        // Define closing message based on plan
+        let closingMsg = "We will email your draft soon.";
+        if (plan === 'executive') closingMsg = "I am preparing your brief for the Senior Writer. Expect a scheduling link shortly.";
+        if (plan === 'pro') closingMsg = "We are drafting your documents. Expect an email in 48 hours.";
 
-        // Define Next Steps based on the Plan
-        let nextStepsText = "Your optimized draft will be emailed to you within 3 business days.";
-        if (plan === 'executive') {
-            nextStepsText = "I will now prepare your briefing for the Senior Writer. Expect a scheduling link for your narrative strategy call within 24 hours.";
-        } else if (plan === 'pro') {
-            nextStepsText = "Our team will begin drafting your Professional documents immediately. Expect the first version via email in 48-72 hours.";
-        } else if (plan === 'core') {
-            nextStepsText = "We will process your ATS optimization and send the revised file shortly.";
-        }
-
-        // The "Enterprise" Persona with KILL SWITCH
         const systemPrompt = {
             role: "system",
-            content: `You are the Senior Architect for Resume Annex. Your goal is to gather info, BUT you must respect the user's time.
-            
-            CORE RULES:
-            1. Analyze the profile for gaps. Ask ONE short, high-impact question at a time.
-            2. CRITICAL: If the user answers "no", "none", "nothing", "I'm done", or gives very short negative responses, DO NOT ASK MORE QUESTIONS.
-            3. CRITICAL: If you have asked 3-4 questions already, wrap it up.
-            
-            CLOSING PROTOCOL:
-            If the user is done or the conversation is stagnant, you MUST end the chat.
-            Say exactly: "Thank you. I have captured everything I need. ${nextStepsText}"
-            Do not ask "Is there anything else?". Just close the session.`
+            content: `You are the Resume Annex Architect. 
+            RULES:
+            1. If the user says "no", "none", "done", or "nothing to add", YOU MUST END THE CHAT.
+            2. To end the chat, strictly say: "Thank you. ${closingMsg}"
+            3. Otherwise, ask ONE specific follow-up question based on the resume gap.`
         };
 
         const completion = await openai.chat.completions.create({
@@ -103,7 +88,11 @@ app.post('/api/chat', async (req, res) => {
         res.json({ reply: completion.choices[0].message.content.trim() });
 
     } catch (error) {
-        console.error("Chat Error:", error);
-        res.status(500).json({ error: "AI Service Unavailable" });
+        console.error("Chat Error:", error.message);
+        res.status(500).json({ error: error.message });
     }
+});
+
+app.listen(PORT, () => {
+    console.log(`>>> Server Active on Port ${PORT}`);
 });
