@@ -1,83 +1,80 @@
 /**
- * RESUME ANNEX - ENTERPRISE BACKEND (v2.0 Stable)
- * Fixes: CORS blocking, API Crashing, Error Logging
+ * RESUME ANNEX - ENTERPRISE BACKEND v3.0
+ * Features: PDF Text Extraction, Anti-Hallucination, Session Management
  */
 
-require('dotenv').config(); 
+require('dotenv').config();
 const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
-const rateLimit = require('express-rate-limit');
-const OpenAI = require('openai'); 
+const OpenAI = require('openai');
+const multer = require('multer'); // Handle file uploads
+const pdf = require('pdf-parse'); // Read PDF text
 
 const app = express();
+const upload = multer(); // Memory storage for uploads
 const PORT = process.env.PORT || 3000;
 
-// --- 1. ROBUST CONFIGURATION ---
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY, 
-});
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// --- 2. SECURITY MIDDLEWARE ---
 app.use(helmet());
+app.use(cors({ origin: '*' }));
+app.use(express.json());
 
-// CRITICAL FIX: Allow your frontend to talk to this server
-app.use(cors({
-    origin: '*', // Temporarily allow all for debugging. In production, change to your domain.
-    methods: ['GET', 'POST'],
-    allowedHeaders: ['Content-Type']
-}));
-
-app.use(express.json({ limit: '10kb' }));
-
-// --- 3. ROUTES ---
-
-// Health Check - Call this to prove server is alive
-app.get('/health', (req, res) => {
-    res.status(200).json({ status: 'ONLINE', message: 'System Operational' });
-});
-
-// Live Demo Endpoint
-app.post('/api/optimize', async (req, res) => {
+// 1. UPLOAD & PARSE ENDPOINT (The Fix for Hallucinations)
+app.post('/api/upload', upload.single('resume'), async (req, res) => {
     try {
-        console.log("Optimization Request Received"); // Server Log
-        const { bulletPoint } = req.body;
-        
-        if (!bulletPoint) return res.status(400).json({ error: 'No text provided' });
+        if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+
+        // Extract Text from PDF
+        const pdfData = await pdf(req.file.buffer);
+        const resumeText = pdfData.text;
+
+        // Initialize Chat with REAL Resume Data
+        const systemPrompt = {
+            role: "system",
+            content: `You are the Senior Architect. 
+            CONTEXT: The user has uploaded a resume. The text is below.
+            RESUME TEXT: "${resumeText.substring(0, 10000)}" 
+            
+            TASK: 
+            1. Analyze this specific text for missing metrics or vague claims.
+            2. Ask ONE clarifying question based ONLY on this text.
+            3. If the resume is empty or unreadable, ask them to paste the text.`
+        };
 
         const completion = await openai.chat.completions.create({
-            messages: [
-                { role: "system", content: "Rewrite this resume bullet to be high-impact and quantified." },
-                { role: "user", content: bulletPoint }
-            ],
+            messages: [systemPrompt],
             model: "gpt-4o",
         });
 
-        res.json({ enhanced: completion.choices[0].message.content.trim() });
+        res.json({ 
+            reply: completion.choices[0].message.content,
+            initialContext: systemPrompt // Send this back so frontend remembers it
+        });
 
     } catch (error) {
-        console.error("AI Error:", error.message); // Logs exact error to Railway console
-        res.status(500).json({ error: error.message || "AI Service Failed" });
+        console.error("Upload Error:", error);
+        res.status(500).json({ error: "Could not read file. Please try pasting text." });
     }
 });
 
-// Intake Chat Endpoint
+// 2. CHAT ENDPOINT
 app.post('/api/chat', async (req, res) => {
     try {
-        const { messages, plan } = req.body; 
+        const { messages, plan } = req.body;
         
-        // Define closing message based on plan
-        let closingMsg = "We will email your draft soon.";
-        if (plan === 'executive') closingMsg = "I am preparing your brief for the Senior Writer. Expect a scheduling link shortly.";
-        if (plan === 'pro') closingMsg = "We are drafting your documents. Expect an email in 48 hours.";
+        // Closing Logic
+        let closingMsg = "We will email your draft within 48 hours.";
+        if (plan === 'executive') closingMsg = "I am preparing your executive brief.";
 
         const systemPrompt = {
             role: "system",
-            content: `You are the Resume Annex Architect. 
+            content: `You are the Resume Architect.
             RULES:
-            1. If the user says "no", "none", "done", or "nothing to add", YOU MUST END THE CHAT.
-            2. To end the chat, strictly say: "Thank you. ${closingMsg}"
-            3. Otherwise, ask ONE specific follow-up question based on the resume gap.`
+            1. Keep context of the resume text provided earlier.
+            2. If user says "no", "done", or "none", say: "Thank you. ${closingMsg}" and stop.
+            3. Otherwise, ask the next strategic question.`
         };
 
         const completion = await openai.chat.completions.create({
@@ -85,14 +82,11 @@ app.post('/api/chat', async (req, res) => {
             model: "gpt-4o",
         });
 
-        res.json({ reply: completion.choices[0].message.content.trim() });
+        res.json({ reply: completion.choices[0].message.content });
 
     } catch (error) {
-        console.error("Chat Error:", error.message);
         res.status(500).json({ error: error.message });
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`>>> Server Active on Port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on ${PORT}`));
