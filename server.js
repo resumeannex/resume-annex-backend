@@ -1,6 +1,9 @@
 /**
- * RESUME ANNEX - ENTERPRISE BACKEND v3.1 (Stable)
- * Features: PDF Text Extraction, Anti-Crash Startup, Robust Error Handling
+ * RESUME ANNEX - ENTERPRISE BACKEND v4.0 (Production)
+ * Features: 
+ * - PDF Text Extraction
+ * - Anti-Hallucination Context
+ * - Focused Career Interview Logic (Aspirations, Education, Experience)
  */
 
 require('dotenv').config();
@@ -8,62 +11,82 @@ const express = require('express');
 const helmet = require('helmet');
 const cors = require('cors');
 const OpenAI = require('openai');
-const multer = require('multer'); // File handling
-const pdf = require('pdf-parse'); // PDF reading
+const multer = require('multer'); 
+const pdf = require('pdf-parse'); 
 
 const app = express();
-const upload = multer(); // Memory storage
+const upload = multer(); 
 const PORT = process.env.PORT || 3000;
 
-// --- 1. SAFETY CHECK: PREVENT STARTUP CRASH ---
+// Initialize OpenAI safely
 let openai;
 try {
-    if (!process.env.OPENAI_API_KEY) {
-        console.error("CRITICAL ERROR: OPENAI_API_KEY is missing in Railway Variables.");
+    if (process.env.OPENAI_API_KEY) {
+        openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    } else {
+        console.warn("WARNING: OPENAI_API_KEY is missing.");
     }
-    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 } catch (err) {
-    console.error("OpenAI Initialization Failed:", err.message);
+    console.error("OpenAI Init Error:", err);
 }
 
-// --- 2. MIDDLEWARE ---
+// Middleware
 app.use(helmet());
-app.use(cors({ origin: '*' })); // Allow all connections for now
-app.use(express.json({ limit: '10mb' })); // Increased limit for larger PDFs
+app.use(cors({ origin: '*' })); 
+app.use(express.json({ limit: '10mb' }));
 
-// --- 3. ROUTES ---
+// --- ROUTES ---
 
-// Health Check
-app.get('/health', (req, res) => {
-    res.status(200).json({ 
-        status: 'ONLINE', 
-        ai_status: openai ? 'CONNECTED' : 'DISCONNECTED' 
-    });
+app.get('/health', (req, res) => res.status(200).json({ status: 'ONLINE' }));
+
+// 1. LIVE DEMO ENDPOINT (Restored)
+app.post('/api/optimize', async (req, res) => {
+    try {
+        if (!openai) throw new Error("AI Offline");
+        const { bulletPoint } = req.body;
+        
+        const completion = await openai.chat.completions.create({
+            messages: [
+                { role: "system", content: "You are an Executive Resume Writer. Rewrite the input bullet point to be high-impact, quantified, and results-driven. Output ONLY the rewritten bullet." },
+                { role: "user", content: `Optimize: "${bulletPoint}"` }
+            ],
+            model: "gpt-4o",
+        });
+
+        res.json({ enhanced: completion.choices[0].message.content.trim() });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
-// UPLOAD & PARSE ENDPOINT
+// 2. RESUME UPLOAD & PARSE
 app.post('/api/upload', upload.single('resume'), async (req, res) => {
     try {
-        if (!openai) throw new Error("AI System is offline (Missing Key)");
+        if (!openai) throw new Error("AI Offline");
         if (!req.file) return res.status(400).json({ error: "No file uploaded" });
-
-        console.log(`Processing file: ${req.file.originalname}`);
 
         // Extract Text
         const pdfData = await pdf(req.file.buffer);
-        const resumeText = pdfData.text;
+        const resumeText = pdfData.text.substring(0, 15000); // Limit context size
 
-        // Initialize Chat with REAL Context
+        // System Prompt: Career Coach Persona
+        // Instructions: Do NOT output the analysis. Only output the question.
         const systemPrompt = {
             role: "system",
-            content: `You are the Senior Architect. 
-            CONTEXT: The user has uploaded a resume.
-            RESUME TEXT: "${resumeText.substring(0, 15000)}" 
+            content: `You are a Senior Career Strategist for Resume Annex. 
             
-            TASK: 
-            1. Analyze this text for gaps.
-            2. Ask ONE clarifying question based ONLY on this text.
-            3. Do not invent previous employers.`
+            CONTEXT: The user has just uploaded their resume text (provided below).
+            
+            YOUR GOAL: Conduct a professional intake interview to prepare for writing their resume.
+            
+            RULES:
+            1. Do NOT output lists like "Gap Analysis" or "Findings". 
+            2. Be conversational. Act like a human recruiter.
+            3. Start by acknowledging the file upload.
+            4. Ask ONE strategic question focused on: Career Aspirations, Specific Experience details, or Educational clarifications.
+            5. Do NOT have two conversations at once.
+            
+            RESUME DATA: "${resumeText}"`
         };
 
         const completion = await openai.chat.completions.create({
@@ -77,43 +100,27 @@ app.post('/api/upload', upload.single('resume'), async (req, res) => {
         });
 
     } catch (error) {
-        console.error("Upload Error:", error.message);
-        res.status(500).json({ error: error.message || "Failed to process file" });
+        console.error("Upload Error:", error);
+        res.status(500).json({ error: "File processing failed." });
     }
 });
 
-// CHAT ENDPOINT
+// 3. CHAT ENDPOINT
 app.post('/api/chat', async (req, res) => {
     try {
-        if (!openai) throw new Error("AI System is offline (Missing Key)");
-        const { messages, plan } = req.body;
-        
-        let closingMsg = "We will email your draft within 48 hours.";
-        if (plan === 'executive') closingMsg = "I am preparing your executive brief.";
-
-        const systemPrompt = {
-            role: "system",
-            content: `You are the Resume Architect.
-            RULES:
-            1. Keep context of the resume provided.
-            2. If user says "no", "done", or "none", say: "Thank you. ${closingMsg}" and stop.`
-        };
+        if (!openai) throw new Error("AI Offline");
+        const { messages } = req.body;
 
         const completion = await openai.chat.completions.create({
-            messages: [systemPrompt, ...messages],
+            messages: messages, // History passed from frontend
             model: "gpt-4o",
         });
 
         res.json({ reply: completion.choices[0].message.content });
 
     } catch (error) {
-        console.error("Chat Error:", error.message);
         res.status(500).json({ error: error.message });
     }
 });
 
-// --- START SERVER ---
-app.listen(PORT, () => {
-    console.log(`>>> Server Running on Port ${PORT}`);
-    console.log(`>>> AI Connection: ${openai ? 'Active' : 'Inactive (Check Logs)'}`);
-});
+app.listen(PORT, () => console.log(`>>> Server Running on ${PORT}`));
